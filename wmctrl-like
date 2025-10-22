@@ -1,0 +1,232 @@
+#!/usr/bin/env bash
+# Simple wrapper to mimic a subset of wmctrl using the GNOME Shell extension D-Bus API.
+# Supports:
+#   -lx                         : list windows (like wmctrl -lx)
+#   -i -a <HEXID>              : activate/focus window by id (like wmctrl -i -a)
+#   -i -r <HEXID> -e W,H       : resize window to WIDTH,HEIGHT (keep position)
+#   -i -r <HEXID> -t INDEX     : move window to workspace INDEX (0-based)
+#   -s INDEX                   : switch to workspace INDEX (0-based) (like wmctrl -s)
+#   getactivewindow             : print active window id (hex) like xdotool getactivewindow
+#   getactiveworkspace          : print active workspace index
+set -euo pipefail
+
+DBUS_DEST="org.gnome.Shell.Extensions.WMCtrl1"
+DBUS_PATH="/org/gnome/Shell/Extensions/WMCtrl1"
+DBUS_IFACE="org.gnome.Shell.Extensions.WMCtrl1"
+
+usage() {
+  cat <<EOF 1>&2
+Usage:
+  wmctrl-like -lx
+  wmctrl-like -i -a <HEX_ID>
+  wmctrl-like -i -r <HEX_ID> -e WIDTH,HEIGHT
+  wmctrl-like -i -r <HEX_ID> -t INDEX
+  wmctrl-like -s INDEX
+  wmctrl-like getactivewindow
+  wmctrl-like getactiveworkspace
+
+Notes:
+  - HEX_ID can be with or without 0x prefix (e.g., 0x1234abcd or 1234abcd).
+  - Ensure the GNOME Shell extension wmctrllike@jasonyukr is installed and enabled.
+EOF
+  exit 1
+}
+
+error_ext_missing() {
+  echo "Error: extension not available. Ensure wmctrllike@jasonyukr is installed, enabled, and GNOME Shell was restarted." 1>&2
+  exit 1
+}
+
+list_windows() {
+  local out
+  out="$(gdbus call --session \
+    --dest "$DBUS_DEST" \
+    --object-path "$DBUS_PATH" \
+    --method "$DBUS_IFACE.ListWindows" 2>/dev/null || true)"
+  if [[ -z "$out" ]]; then
+    error_ext_missing
+  fi
+  # Extract single-string payload and unescape newlines and escapes
+  local payload
+  payload="$(printf '%s' "$out" | grep -Po "(?<=\\(')(?:\\\\'|[^'])*(?=')" || true)"
+  printf '%b\n' "$payload"
+}
+
+get_active_ws() {
+  local out
+  out="$(gdbus call --session \
+    --dest "$DBUS_DEST" \
+    --object-path "$DBUS_PATH" \
+    --method "$DBUS_IFACE.GetActiveWorkspace" 2>/dev/null || true)"
+  if [[ -z "$out" ]]; then
+    error_ext_missing
+  fi
+  local payload
+  payload="$(printf '%s' "$out" | grep -Po "(?<=\\(')(?:\\\\'|[^'])*(?=')" || true)"
+  printf '%s\n' "$payload"
+}
+
+get_active_window() {
+  local out
+  out="$(gdbus call --session \
+    --dest "$DBUS_DEST" \
+    --object-path "$DBUS_PATH" \
+    --method "$DBUS_IFACE.GetActiveWindow" 2>/dev/null || true)"
+  if [[ -z "$out" ]]; then
+    error_ext_missing
+  fi
+  local payload
+  payload="$(printf '%s' "$out" | grep -Po "(?<=\\(')(?:\\\\'|[^'])*(?=')" || true)"
+  printf '%s\n' "$payload"
+}
+
+activate_id() {
+  local id="${1:-}"
+  if [[ -z "$id" ]]; then
+    echo "Error: missing HEX_ID" 1>&2
+    usage
+  fi
+  local out
+  out="$(gdbus call --session \
+    --dest "$DBUS_DEST" \
+    --object-path "$DBUS_PATH" \
+    --method "$DBUS_IFACE.ActivateById" "$id" 2>/dev/null || true)"
+  if [[ -z "$out" ]]; then
+    error_ext_missing
+  fi
+  if grep -q "(\s*true" <<<"$out"; then
+    exit 0
+  else
+    echo "Error: failed to activate window id $id" 1>&2
+    exit 2
+  fi
+}
+ 
+resize_by_id() {
+  local id="$1"
+  local dims="$2"
+  if [[ -z "$id" || -z "$dims" ]]; then
+    echo "Error: missing arguments for -e (expected WIDTH,HEIGHT)" 1>&2
+    usage
+  fi
+  local w h
+  IFS=',' read -r w h <<<"$dims"
+  if ! [[ "$w" =~ ^[0-9]+$ && "$h" =~ ^[0-9]+$ ]]; then
+    echo "Error: -e expects WIDTH,HEIGHT as positive integers" 1>&2
+    exit 2
+  fi
+  local out
+  out="$(gdbus call --session \
+    --dest "$DBUS_DEST" \
+    --object-path "$DBUS_PATH" \
+    --method "$DBUS_IFACE.ResizeById" "$id" $w $h 2>/dev/null || true)"
+  if [[ -z "$out" ]]; then
+    error_ext_missing
+  fi
+  if grep -q "(\s*true" <<<"$out"; then
+    exit 0
+  else
+    echo "Error: failed to resize window id $id to ${w}x${h}" 1>&2
+    exit 3
+  fi
+}
+
+move_to_ws_by_id() {
+  local id="$1"
+  local idx="$2"
+  if [[ -z "$id" || -z "$idx" ]]; then
+    echo "Error: missing arguments for -t (expected INDEX)" 1>&2
+    usage
+  fi
+  if ! [[ "$idx" =~ ^-?[0-9]+$ ]]; then
+    echo "Error: -t expects workspace INDEX (integer)" 1>&2
+    exit 2
+  fi
+  local out
+  out="$(gdbus call --session \
+    --dest "$DBUS_DEST" \
+    --object-path "$DBUS_PATH" \
+    --method "$DBUS_IFACE.MoveToWorkspaceById" "$id" $idx 2>/dev/null || true)"
+  if [[ -z "$out" ]]; then
+    error_ext_missing
+  fi
+  if grep -q "(\s*true" <<<"$out"; then
+    exit 0
+  else
+    echo "Error: failed to move window id $id to workspace $idx" 1>&2
+    exit 4
+  fi
+}
+ 
+switch_workspace() {
+  local idx="$1"
+  if [[ -z "$idx" ]]; then
+    echo "Error: missing argument for -s (expected INDEX)" 1>&2
+    usage
+  fi
+  if ! [[ "$idx" =~ ^[0-9]+$ ]]; then
+    echo "Error: -s expects workspace INDEX (non-negative integer)" 1>&2
+    exit 2
+  fi
+  local out
+  out="$(gdbus call --session \
+    --dest "$DBUS_DEST" \
+    --object-path "$DBUS_PATH" \
+    --method "$DBUS_IFACE.SwitchWorkspace" $idx 2>/dev/null || true)"
+  if [[ -z "$out" ]]; then
+    error_ext_missing
+  fi
+  if grep -q "(\s*true" <<<"$out"; then
+    exit 0
+  else
+    echo "Error: failed to switch to workspace $idx" 1>&2
+    exit 5
+  fi
+}
+ 
+if [[ $# -eq 1 && "$1" == "getactivewindow" ]]; then
+  get_active_window
+  exit 0
+fi
+
+if [[ $# -eq 1 && "$1" == "getactiveworkspace" ]]; then
+  get_active_ws
+  exit 0
+fi
+
+# Resize: -i -r ID -e WIDTH,HEIGHT
+if [[ $# -eq 5 && "$1" == "-i" && "$2" == "-r" && "$4" == "-e" ]]; then
+  resize_by_id "$3" "$5"
+  exit 0
+fi
+
+# Move to workspace: -i -r ID -t INDEX
+if [[ $# -eq 5 && "$1" == "-i" && "$2" == "-r" && "$4" == "-t" ]]; then
+  move_to_ws_by_id "$3" "$5"
+  exit 0
+fi
+ 
+if [[ $# -eq 1 && "$1" == "-lx" ]]; then
+  list_windows
+  exit 0
+fi
+
+# Switch workspace: -s INDEX
+if [[ $# -eq 2 && "$1" == "-s" ]]; then
+  switch_workspace "$2"
+  exit 0
+fi
+
+# Support either order: -i -a ID or -a -i ID
+if [[ $# -eq 3 ]]; then
+  if [[ "$1" == "-i" && "$2" == "-a" ]]; then
+    activate_id "$3"
+    exit 0
+  fi
+  if [[ "$1" == "-a" && "$2" == "-i" ]]; then
+    activate_id "$3"
+    exit 0
+  fi
+fi
+
+usage

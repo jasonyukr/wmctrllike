@@ -1,0 +1,7 @@
+{
+  "uuid": "wmctrllike@jasonyukr",
+  "name": "WMCtrl-like Window Management",
+  "description": "Expose a wmctrl style window management commands on Wayland via a GNOME Shell extension D-Bus API.",
+  "version": 1,
+  "shell-version": ["40"]
+}
