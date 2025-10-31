@@ -59,7 +59,7 @@ const IFACE_XML = `
       <arg type="i" name="code" direction="out"/>
     </method>
     <method name="LaunchHere">
-      <arg type="s" name="path" direction="in"/>
+      <arg type="s" name="command_line" direction="in"/>
       <arg type="s" name="appId" direction="in"/>
       <arg type="b" name="ok" direction="out"/>
     </method>
@@ -779,8 +779,18 @@ class WMCtrlLikeExtension {
         stream.close(null);
     }
 
-    _launchHere(path, appId) {
-        // this._debugLog(`Launching ${path} with appId ${appId}`);
+    _launchHere(command_line, appId) {
+        // this._debugLog(`Launching ${command_line} with appId ${appId}`);
+        if (!appId || appId.trim() === '') {
+            try {
+                GLib.spawn_command_line_async(command_line);
+                return true;
+            } catch (e) {
+                // this._debugLog(`Launch failed: ${e.message}`);
+                return false;
+            }
+        }
+
         const currentItems = this._listWindowsItems();
         const maxKey = currentItems.length > 0 ? Math.max(...currentItems.map(it => it.key)) : 0;
         const performActions = (win) => {
@@ -793,7 +803,7 @@ class WMCtrlLikeExtension {
             }
             // this._debugLog(`Activating window`);
             this._activateWindowById(this._toHexId(win));
-            if (path.includes('/opt/kitty/linux-package/bin/kitty')) {
+            if (command_line.includes('/opt/kitty/linux-package/bin/kitty')) {
                 const monitorIndex = global.display.get_current_monitor();
                 const geometry = global.display.get_monitor_geometry(monitorIndex);
                 const screenW = geometry.width;
@@ -809,7 +819,7 @@ class WMCtrlLikeExtension {
             }
         };
         try {
-            GLib.spawn_command_line_async(path);
+            GLib.spawn_command_line_async(command_line);
         } catch (e) {
             // this._debugLog(`Launch failed: ${e.message}`);
             return false;
@@ -893,8 +903,8 @@ class WMCtrlLikeExtension {
             FocusByCls: (cls) => {
                 return this._focusByCls(cls);
             },
-            LaunchHere: (path, appId) => {
-                return this._launchHere(path, appId);
+            LaunchHere: (command_line, appId) => {
+                return this._launchHere(command_line, appId);
             },
         });
 
