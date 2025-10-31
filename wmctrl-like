@@ -26,6 +26,7 @@ Usage:
   wmctrl-like getactivewindow
   wmctrl-like getactiveworkspace
   wmctrl-like focusbycls CLS
+  wmctrl-like launchhere PATH APPID
 
 Notes:
   - HEX_ID can be with or without 0x prefix (e.g., 0x1234abcd or 1234abcd).
@@ -138,6 +139,29 @@ focus_by_cls() {
     exit "$code"
   fi
 }
+
+launch_here() {
+  local path="${1:-}"
+  local appId="${2:-}"
+  if [[ -z "$path" || -z "$appId" ]]; then
+    echo "Error: missing PATH or APPID" 1>&2
+    usage
+  fi
+  local out
+  out="$(gdbus call --session \
+    --dest "$DBUS_DEST" \
+    --object-path "$DBUS_PATH" \
+    --method "$DBUS_IFACE.LaunchHere" "$path" "$appId" 2>/dev/null || true)"
+  if [[ -z "$out" ]]; then
+    error_ext_missing
+  fi
+  if grep -q "(\s*true" <<<"$out"; then
+    exit 0
+  else
+    echo "Error: failed to launch $path with appId $appId" 1>&2
+    exit 6
+  fi
+}
  
 resize_by_id() {
   local id="$1"
@@ -234,6 +258,12 @@ fi
 # Focus by class/appId: focusbycls CLS
 if [[ $# -eq 2 && "$1" == "focusbycls" ]]; then
   focus_by_cls "$2"
+  exit 0
+fi
+
+# Launch here: launchhere PATH APPID
+if [[ $# -eq 3 && "$1" == "launchhere" ]]; then
+  launch_here "$2" "$3"
   exit 0
 fi
 

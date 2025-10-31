@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 'use strict';
 
-const { Gio, Meta, Shell, Clutter } = imports.gi;
+const { Gio, Meta, Shell, Clutter, GLib } = imports.gi;
 const ExtensionUtils = imports.misc.extensionUtils;
 const Me = ExtensionUtils.getCurrentExtension();
 
@@ -57,6 +57,11 @@ const IFACE_XML = `
     <method name="FocusByCls">
       <arg type="s" name="cls" direction="in"/>
       <arg type="i" name="code" direction="out"/>
+    </method>
+    <method name="LaunchHere">
+      <arg type="s" name="path" direction="in"/>
+      <arg type="s" name="appId" direction="in"/>
+      <arg type="b" name="ok" direction="out"/>
     </method>
   </interface>
 </node>`;
@@ -761,6 +766,86 @@ class WMCtrlLikeExtension {
         }
     }
 
+    _debugLog(msg) {
+        const logPath = GLib.build_filenamev([GLib.get_tmp_dir(), 'wmctrllike.log']);
+        const file = Gio.File.new_for_path(logPath);
+        let stream;
+        try {
+            stream = file.append_to(Gio.FileCreateFlags.NONE, null);
+        } catch (e) {
+            stream = file.create(Gio.FileCreateFlags.NONE, null);
+        }
+        stream.write(`${new Date().toISOString()} [LaunchHere] ${msg}\n`, null);
+        stream.close(null);
+    }
+
+    _launchHere(path, appId) {
+        // this._debugLog(`Launching ${path} with appId ${appId}`);
+        const currentItems = this._listWindowsItems();
+        const maxKey = currentItems.length > 0 ? Math.max(...currentItems.map(it => it.key)) : 0;
+        const performActions = (win) => {
+            // this._debugLog(`New window detected: ${this._toHexId(win)} for ${appId}`);
+            const currentWs = this._activeWorkspaceIndex();
+            const winWs = this._workspaceIndex(win);
+            if (winWs !== currentWs && winWs !== -1) {
+                // this._debugLog(`Moving window to workspace ${currentWs}`);
+                this._moveWindowToWorkspaceById(this._toHexId(win), currentWs);
+            }
+            // this._debugLog(`Activating window`);
+            this._activateWindowById(this._toHexId(win));
+            if (path.includes('/opt/kitty/linux-package/bin/kitty')) {
+                const monitorIndex = global.display.get_current_monitor();
+                const geometry = global.display.get_monitor_geometry(monitorIndex);
+                const screenW = geometry.width;
+                const screenH = geometry.height;
+                const newW = Math.floor(screenW * 0.4);
+                const newH = Math.floor(screenH * 0.5);
+                // this._debugLog(`Scheduling resize for kitty to ${newW}x${newH}`);
+                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+                    // this._debugLog(`Performing resize for kitty to ${newW}x${newH}`);
+                    this._resizeWindowById(this._toHexId(win), newW, newH);
+                    return GLib.SOURCE_REMOVE;
+                });
+            }
+        };
+        try {
+            GLib.spawn_command_line_async(path);
+        } catch (e) {
+            // this._debugLog(`Launch failed: ${e.message}`);
+            return false;
+        }
+        const handlerId = global.display.connect('window-created', (display, win) => {
+            const winCls = this._classInstance(win);
+            const winKey = this._creationOrderKey(win);
+            if (winCls === appId.toLowerCase() && winKey > maxKey) {
+                performActions(win);
+                global.display.disconnect(handlerId);
+                GLib.source_remove(timeoutId);
+            } else if (winKey > maxKey) {
+                const notifyId = win.connect('notify::wm-class', () => {
+                    const newCls = this._classInstance(win);
+                    // this._debugLog(`WM_CLASS changed for ${this._toHexId(win)}: ${newCls}`);
+                    if (newCls === appId.toLowerCase()) {
+                        performActions(win);
+                        global.display.disconnect(handlerId);
+                        win.disconnect(notifyId);
+                        GLib.source_remove(timeoutId);
+                    }
+                });
+                GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 5, () => {
+                    win.disconnect(notifyId);
+                    return GLib.SOURCE_REMOVE;
+                });
+            }
+        });
+        const timeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 10, () => {
+            global.display.disconnect(handlerId);
+            // this._debugLog(`Timeout: No new window for ${appId}`);
+            return GLib.SOURCE_REMOVE;
+        });
+        return true;
+    }
+
     enable() {
         const nodeInfo = Gio.DBusNodeInfo.new_for_xml(IFACE_XML);
         const ifaceInfo = nodeInfo.interfaces[0];
@@ -807,6 +892,9 @@ class WMCtrlLikeExtension {
             },
             FocusByCls: (cls) => {
                 return this._focusByCls(cls);
+            },
+            LaunchHere: (path, appId) => {
+                return this._launchHere(path, appId);
             },
         });
 
