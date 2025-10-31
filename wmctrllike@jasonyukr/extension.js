@@ -21,6 +21,18 @@ const IFACE_XML = `
     <method name="GetActiveWindow">
       <arg type="s" name="id" direction="out"/>
     </method>
+    <method name="FocusNextSameAppWindow">
+      <arg type="b" name="ok" direction="out"/>
+    </method>
+    <method name="FocusPrevSameAppWindow">
+      <arg type="b" name="ok" direction="out"/>
+    </method>
+    <method name="FocusNextOtherAppWindow">
+      <arg type="b" name="ok" direction="out"/>
+    </method>
+    <method name="FocusPrevOtherAppWindow">
+      <arg type="b" name="ok" direction="out"/>
+    </method>
     <method name="ResizeById">
       <arg type="s" name="id" direction="in"/>
       <arg type="i" name="width" direction="in"/>
@@ -196,7 +208,8 @@ class WMCtrlLikeExtension {
         return true;
     }
 
-    _listWindows() {
+    // Collect sorted window items for internal reuse
+    _listWindowsItems() {
         const items = [];
         const actors = global.get_window_actors();
 
@@ -238,7 +251,17 @@ class WMCtrlLikeExtension {
             return String(a.id).localeCompare(String(b.id));
         });
 
-        return items.map(it => `${it.id} ${it.desk} ${it.cls} ${it.title}`);
+        return items;
+    }
+
+    // Adapter that preserves the original ListWindows output format
+    _listWindows() {
+        try {
+            const items = this._listWindowsItems();
+            return items.map(it => `${it.id} ${it.desk} ${it.cls} ${it.title}`);
+        } catch (e) {
+            return [];
+        }
     }
 
     _listWindowsText() {
@@ -503,6 +526,141 @@ class WMCtrlLikeExtension {
         }
     }
 
+    _focusRelativeSameAppWindow(delta) {
+        try {
+            const wsIdx = this._activeWorkspaceIndex();
+            const activeId = this._activeWindowId();
+            if (!activeId)
+                return false;
+
+            // Determine active class
+            let activeCls = null;
+            const activeWin = this._findWindowById(activeId);
+            if (activeWin)
+                activeCls = this._classInstance(activeWin);
+
+            // Reuse shared, sorted window collection
+            const all = this._listWindowsItems();
+            if (!Array.isArray(all) || all.length === 0)
+                return false;
+
+            if (!activeCls) {
+                const found = all.find(it => String(it.id).toLowerCase() === String(activeId).toLowerCase());
+                if (!found)
+                    return false;
+                activeCls = found.cls;
+            }
+
+            // Same app, same workspace (include sticky windows)
+            const items = all.filter(it => it.cls === activeCls && (it.desk === wsIdx || it.desk === -1));
+            if (items.length === 0)
+                return false;
+
+            // Find current index within the filtered list
+            let idx = items.findIndex(it => String(it.id).toLowerCase() === String(activeId).toLowerCase());
+            if (idx === -1)
+                idx = (delta > 0) ? -1 : 0;
+
+            // Circular wrap
+            const len = items.length;
+            let targetIndex = (len === 1) ? 0 : (idx + delta) % len;
+            if (targetIndex < 0)
+                targetIndex += len;
+
+            const target = items[targetIndex];
+            if (!target)
+                return false;
+
+            return this._activateWindowById(target.id);
+        } catch (e) {
+            return false;
+        }
+    }
+
+    _focusNextSameAppWindow() {
+        return this._focusRelativeSameAppWindow(+1);
+    }
+
+    _focusPrevSameAppWindow() {
+        return this._focusRelativeSameAppWindow(-1);
+    }
+
+    _focusRelativeOtherAppWindow(delta) {
+        try {
+            const wsIdx = this._activeWorkspaceIndex();
+            const activeId = this._activeWindowId();
+            if (!activeId)
+                return false;
+
+            // Use shared, sorted window list
+            const all = this._listWindowsItems();
+            if (!Array.isArray(all) || all.length === 0)
+                return false;
+
+            // Determine class of the active window
+            let activeCls = null;
+            const activeFound = all.find(it => String(it.id).toLowerCase() === String(activeId).toLowerCase());
+            if (activeFound) {
+                activeCls = activeFound.cls;
+            } else {
+                const w = this._findWindowById(activeId);
+                if (!w)
+                    return false;
+                activeCls = this._classInstance(w);
+            }
+
+            const COPYQ_CLS = 'copyq.copyq';
+
+            // Consider only same-workspace (or sticky) items, in the same global order
+            const inWs = all.filter(it => (it.desk === wsIdx || it.desk === -1));
+            if (inWs.length === 0)
+                return false;
+
+            // Position relative to current active window within workspace list
+            let idx = inWs.findIndex(it => String(it.id).toLowerCase() === String(activeId).toLowerCase());
+            if (idx === -1)
+                idx = (delta > 0) ? -1 : 0;
+
+            const len = inWs.length;
+            if (len === 1) {
+                // Only one window visible in workspace; must be same as active or not usable
+                const only = inWs[0];
+                if (only && only.cls !== activeCls && only.cls !== COPYQ_CLS)
+                    return this._activateWindowById(only.id);
+                return false;
+            }
+
+            // Step through circularly to find the next/prev window of a different app, skipping CopyQ
+            for (let step = 1; step <= len; step++) {
+                let targetIndex = (idx + delta * step) % len;
+                if (targetIndex < 0)
+                    targetIndex += len;
+
+                const cand = inWs[targetIndex];
+                if (!cand)
+                    continue;
+                if (cand.cls === COPYQ_CLS)
+                    continue;
+                if (cand.cls === activeCls)
+                    continue;
+
+                return this._activateWindowById(cand.id);
+            }
+
+            return false;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    _focusNextOtherAppWindow() {
+        return this._focusRelativeOtherAppWindow(+1);
+    }
+
+    _focusPrevOtherAppWindow() {
+        return this._focusRelativeOtherAppWindow(-1);
+    }
+
     enable() {
         const nodeInfo = Gio.DBusNodeInfo.new_for_xml(IFACE_XML);
         const ifaceInfo = nodeInfo.interfaces[0];
@@ -528,6 +686,18 @@ class WMCtrlLikeExtension {
             },
             SwitchWorkspace: (index) => {
                 return this._switchWorkspace(index);
+            },
+            FocusNextSameAppWindow: () => {
+                return this._focusNextSameAppWindow();
+            },
+            FocusPrevSameAppWindow: () => {
+                return this._focusPrevSameAppWindow();
+            },
+            FocusNextOtherAppWindow: () => {
+                return this._focusNextOtherAppWindow();
+            },
+            FocusPrevOtherAppWindow: () => {
+                return this._focusPrevOtherAppWindow();
             },
         });
 
