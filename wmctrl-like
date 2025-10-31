@@ -8,6 +8,7 @@
 #   -s INDEX                   : switch to workspace INDEX (0-based) (like wmctrl -s)
 #   getactivewindow             : print active window id (hex) like xdotool getactivewindow
 #   getactiveworkspace          : print active workspace index
+#   focusbycls <CLS>           : focus by class/appId (prefers current workspace; exit 1 if not found, 2 if activation fails)
 set -euo pipefail
 
 DBUS_DEST="org.gnome.Shell.Extensions.WMCtrl1"
@@ -24,6 +25,7 @@ Usage:
   wmctrl-like -s INDEX
   wmctrl-like getactivewindow
   wmctrl-like getactiveworkspace
+  wmctrl-like focusbycls CLS
 
 Notes:
   - HEX_ID can be with or without 0x prefix (e.g., 0x1234abcd or 1234abcd).
@@ -99,6 +101,41 @@ activate_id() {
   else
     echo "Error: failed to activate window id $id" 1>&2
     exit 2
+  fi
+}
+ 
+focus_by_cls() {
+  local cls="${1:-}"
+  if [[ -z "$cls" ]]; then
+    echo "Error: missing CLS (class/appId)" 1>&2
+    usage
+  fi
+  local out
+  out="$(gdbus call --session \
+    --dest "$DBUS_DEST" \
+    --object-path "$DBUS_PATH" \
+    --method "$DBUS_IFACE.FocusByCls" "$cls" 2>/dev/null || true)"
+  if [[ -z "$out" ]]; then
+    error_ext_missing
+  fi
+  local code
+  code="$(printf '%s' "$out" | grep -Po '(?<=\()\s*-?[0-9]+(?=,?\s*\))' | head -n1 || true)"
+  if [[ -z "$code" ]]; then
+    echo "Error: unexpected FocusByCls response: $out" 1>&2
+    exit 2
+  fi
+  if [[ "$code" -eq 0 ]]; then
+    exit 0
+  elif [[ "$code" -eq 1 ]]; then
+    echo "No matching window for cls '$cls'." 1>&2
+    exit 1
+  elif [[ "$code" -eq 2 ]]; then
+    echo "Found match but activation failed for cls '$cls'." 1>&2
+    exit 2
+  else
+    # Unknown code, propagate as generic failure
+    echo "FocusByCls returned code $code for cls '$cls'." 1>&2
+    exit "$code"
   fi
 }
  
@@ -191,6 +228,12 @@ fi
 
 if [[ $# -eq 1 && "$1" == "getactiveworkspace" ]]; then
   get_active_ws
+  exit 0
+fi
+
+# Focus by class/appId: focusbycls CLS
+if [[ $# -eq 2 && "$1" == "focusbycls" ]]; then
+  focus_by_cls "$2"
   exit 0
 fi
 

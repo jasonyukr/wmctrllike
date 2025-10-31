@@ -54,6 +54,10 @@ const IFACE_XML = `
       <arg type="i" name="index" direction="in"/>
       <arg type="b" name="ok" direction="out"/>
     </method>
+    <method name="FocusByCls">
+      <arg type="s" name="cls" direction="in"/>
+      <arg type="i" name="code" direction="out"/>
+    </method>
   </interface>
 </node>`;
 
@@ -720,6 +724,43 @@ class WMCtrlLikeExtension {
         return this._focusRelativeAnyAppWindow(-1);
     }
 
+    // Focus window by class/appId with preference to current workspace.
+    // Returns:
+    //   0 = success (focused a matching window)
+    //   1 = no match found
+    //   2 = found match but activation failed (or unexpected error)
+    _focusByCls(cls) {
+        try {
+            if (typeof cls !== 'string' || cls.trim() === '')
+                return 1;
+
+            const targetCls = String(cls).trim().toLowerCase();
+            const all = this._listWindowsItems();
+            if (!Array.isArray(all) || all.length === 0)
+                return 1;
+
+            const wsIdx = this._activeWorkspaceIndex();
+
+            // exact match against our normalized cls field
+            const matches = all.filter(it => String(it.cls).toLowerCase() === targetCls);
+            if (matches.length === 0)
+                return 1;
+
+            // Prefer current workspace (including sticky)
+            const inWs = matches.filter(it => (it.desk === wsIdx || it.desk === -1));
+            const offWs = matches.filter(it => !(it.desk === wsIdx || it.desk === -1));
+
+            const pick = (inWs.length > 0 ? inWs[0] : (offWs[0] || null));
+            if (!pick)
+                return 1;
+
+            const ok = this._activateWindowById(pick.id);
+            return ok ? 0 : 2;
+        } catch (e) {
+            return 2;
+        }
+    }
+
     enable() {
         const nodeInfo = Gio.DBusNodeInfo.new_for_xml(IFACE_XML);
         const ifaceInfo = nodeInfo.interfaces[0];
@@ -763,6 +804,9 @@ class WMCtrlLikeExtension {
             },
             FocusPrevAnyAppWindow: () => {
                 return this._focusPrevAnyAppWindow();
+            },
+            FocusByCls: (cls) => {
+                return this._focusByCls(cls);
             },
         });
 
