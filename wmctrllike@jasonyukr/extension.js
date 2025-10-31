@@ -33,6 +33,12 @@ const IFACE_XML = `
     <method name="FocusPrevOtherAppWindow">
       <arg type="b" name="ok" direction="out"/>
     </method>
+    <method name="FocusNextAnyAppWindow">
+      <arg type="b" name="ok" direction="out"/>
+    </method>
+    <method name="FocusPrevAnyAppWindow">
+      <arg type="b" name="ok" direction="out"/>
+    </method>
     <method name="ResizeById">
       <arg type="s" name="id" direction="in"/>
       <arg type="i" name="width" direction="in"/>
@@ -661,6 +667,59 @@ class WMCtrlLikeExtension {
         return this._focusRelativeOtherAppWindow(-1);
     }
 
+    _focusRelativeAnyAppWindow(delta) {
+        try {
+            const wsIdx = this._activeWorkspaceIndex();
+            const activeId = this._activeWindowId();
+            if (!activeId)
+                return false;
+
+            const all = this._listWindowsItems();
+            if (!Array.isArray(all) || all.length === 0)
+                return false;
+
+            const COPYQ_CLS = 'copyq.copyq';
+
+            const inWs = all.filter(it => (it.desk === wsIdx || it.desk === -1));
+            if (inWs.length === 0)
+                return false;
+
+            let idx = inWs.findIndex(it => String(it.id).toLowerCase() === String(activeId).toLowerCase());
+            if (idx === -1)
+                idx = (delta > 0) ? -1 : 0;
+
+            const len = inWs.length;
+
+            for (let step = 1; step <= len; step++) {
+                let targetIndex = (idx + delta * step) % len;
+                if (targetIndex < 0)
+                    targetIndex += len;
+
+                const cand = inWs[targetIndex];
+                if (!cand)
+                    continue;
+                if (cand.cls === COPYQ_CLS)
+                    continue;
+                if (String(cand.id).toLowerCase() === String(activeId).toLowerCase())
+                    continue;
+
+                return this._activateWindowById(cand.id);
+            }
+
+            return false;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    _focusNextAnyAppWindow() {
+        return this._focusRelativeAnyAppWindow(+1);
+    }
+
+    _focusPrevAnyAppWindow() {
+        return this._focusRelativeAnyAppWindow(-1);
+    }
+
     enable() {
         const nodeInfo = Gio.DBusNodeInfo.new_for_xml(IFACE_XML);
         const ifaceInfo = nodeInfo.interfaces[0];
@@ -698,6 +757,12 @@ class WMCtrlLikeExtension {
             },
             FocusPrevOtherAppWindow: () => {
                 return this._focusPrevOtherAppWindow();
+            },
+            FocusNextAnyAppWindow: () => {
+                return this._focusNextAnyAppWindow();
+            },
+            FocusPrevAnyAppWindow: () => {
+                return this._focusPrevAnyAppWindow();
             },
         });
 
