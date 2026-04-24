@@ -214,6 +214,7 @@ class WMCtrlLikeExtension {
     _lowerFocusedWindow() {
         try {
             let w = null;
+            let timestamp = 0;
             try {
                 if (global.display && typeof global.display.get_focus_window === 'function')
                     w = global.display.get_focus_window();
@@ -225,13 +226,22 @@ class WMCtrlLikeExtension {
             if (!w)
                 return false;
             try {
+                if (global.display && typeof global.display.get_current_time_roundtrip === 'function')
+                    timestamp = global.display.get_current_time_roundtrip();
+                else if (Clutter && typeof Clutter.get_current_event_time === 'function')
+                    timestamp = Clutter.get_current_event_time();
+            } catch (e) {}
+            try {
                 if (typeof w.lower_with_transients === 'function') {
                     w.lower_with_transients();
-                    return true;
                 } else if (typeof w.lower === 'function') {
                     w.lower();
-                    return true;
+                } else {
+                    return false;
                 }
+                if (global.display && typeof global.display.focus_default_window === 'function')
+                    global.display.focus_default_window(timestamp);
+                return true;
             } catch (e) {
                 return false;
             }
