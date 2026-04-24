@@ -21,6 +21,9 @@ const IFACE_XML = `
     <method name="GetActiveWindow">
       <arg type="s" name="id" direction="out"/>
     </method>
+    <method name="LowerFocusedWindow">
+      <arg type="b" name="ok" direction="out"/>
+    </method>
     <method name="FocusNextSameAppWindow">
       <arg type="b" name="ok" direction="out"/>
     </method>
@@ -205,6 +208,36 @@ class WMCtrlLikeExtension {
             return this._toHexId(w);
         } catch (e) {
             return '';
+        }
+    }
+
+    _lowerFocusedWindow() {
+        try {
+            let w = null;
+            try {
+                if (global.display && typeof global.display.get_focus_window === 'function')
+                    w = global.display.get_focus_window();
+            } catch (e) {}
+            try {
+                if (!w && global.display && 'focus_window' in global.display)
+                    w = global.display.focus_window;
+            } catch (e) {}
+            if (!w)
+                return false;
+            try {
+                if (typeof w.lower_with_transients === 'function') {
+                    w.lower_with_transients();
+                    return true;
+                } else if (typeof w.lower === 'function') {
+                    w.lower();
+                    return true;
+                }
+            } catch (e) {
+                return false;
+            }
+            return false;
+        } catch (e) {
+            return false;
         }
     }
 
@@ -872,6 +905,9 @@ class WMCtrlLikeExtension {
             },
             GetActiveWindow: () => {
                 return this._activeWindowId();
+            },
+            LowerFocusedWindow: () => {
+                return this._lowerFocusedWindow();
             },
             ResizeById: (id, width, height) => {
                 return this._resizeWindowById(id, width, height);

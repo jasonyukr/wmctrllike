@@ -7,6 +7,7 @@
 #   -i -r <HEXID> -t INDEX     : move window to workspace INDEX (0-based)
 #   -s INDEX                   : switch to workspace INDEX (0-based) (like wmctrl -s)
 #   getactivewindow             : print active window id (hex) like xdotool getactivewindow
+#   loweractivewindow           : lower the focused window to the bottom of the stack
 #   getactiveworkspace          : print active workspace index
 #   focusbycls <CLS>           : focus by class/appId (prefers current workspace; exit 1 if not found, 2 if activation fails)
 set -euo pipefail
@@ -24,6 +25,7 @@ Usage:
   wmctrl-like -i -r <HEX_ID> -t INDEX
   wmctrl-like -s INDEX
   wmctrl-like getactivewindow
+  wmctrl-like loweractivewindow
   wmctrl-like getactiveworkspace
   wmctrl-like focusbycls CLS
   wmctrl-like launchhere COMMAND_LINE APPID
@@ -81,6 +83,23 @@ get_active_window() {
   local payload
   payload="$(printf '%s' "$out" | grep -Po "(?<=\\(')(?:\\\\'|[^'])*(?=')" || true)"
   printf '%s\n' "$payload"
+}
+
+lower_active_window() {
+  local out
+  out="$(gdbus call --session \
+    --dest "$DBUS_DEST" \
+    --object-path "$DBUS_PATH" \
+    --method "$DBUS_IFACE.LowerFocusedWindow" 2>/dev/null || true)"
+  if [[ -z "$out" ]]; then
+    error_ext_missing
+  fi
+  if grep -q "(\s*true" <<<"$out"; then
+    exit 0
+  else
+    echo "Error: failed to lower focused window" 1>&2
+    exit 7
+  fi
 }
 
 activate_id() {
@@ -247,6 +266,11 @@ switch_workspace() {
  
 if [[ $# -eq 1 && "$1" == "getactivewindow" ]]; then
   get_active_window
+  exit 0
+fi
+
+if [[ $# -eq 1 && "$1" == "loweractivewindow" ]]; then
+  lower_active_window
   exit 0
 fi
 
