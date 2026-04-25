@@ -239,6 +239,61 @@ class WMCtrlLikeExtension {
                 } else {
                     return false;
                 }
+                if (global.display && typeof global.display.sort_windows_by_stacking === 'function') {
+                    const loweredId = this._toHexId(w);
+                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+                        try {
+                            let focusTimestamp = timestamp;
+                            try {
+                                if (global.display && typeof global.display.get_current_time_roundtrip === 'function')
+                                    focusTimestamp = global.display.get_current_time_roundtrip();
+                            } catch (e) {}
+                            const wsIdx = this._activeWorkspaceIndex();
+                            const candidates = global.display.sort_windows_by_stacking(
+                                global.get_window_actors()
+                                    .map(actor => actor.meta_window)
+                                    .filter(win => {
+                                        if (!win)
+                                            return false;
+                                        if (String(this._toHexId(win)).toLowerCase() === String(loweredId).toLowerCase())
+                                            return false;
+                                        if (!this._isTasklistWindow(win))
+                                            return false;
+                                        if (this._workspaceIndex(win) !== wsIdx && this._workspaceIndex(win) !== -1)
+                                            return false;
+                                        return this._classInstance(win) !== 'copyq.copyq';
+                                    })
+                            ).reverse();
+                            const candidate = candidates[0];
+
+                            if (candidate) {
+                                try {
+                                    if (typeof candidate.unminimize === 'function' && candidate.minimized)
+                                        candidate.unminimize();
+                                } catch (e) {}
+                                if (global.display && typeof global.display.unset_input_focus === 'function')
+                                    global.display.unset_input_focus(focusTimestamp);
+                                if (typeof candidate.focus === 'function') {
+                                    candidate.focus(focusTimestamp);
+                                    return GLib.SOURCE_REMOVE;
+                                }
+                                if (global.display && typeof global.display.set_input_focus === 'function') {
+                                    global.display.set_input_focus(candidate, true, focusTimestamp);
+                                    return GLib.SOURCE_REMOVE;
+                                }
+                                if (typeof candidate.activate === 'function') {
+                                    candidate.activate(focusTimestamp);
+                                    return GLib.SOURCE_REMOVE;
+                                }
+                            }
+                            if (global.display && typeof global.display.focus_default_window === 'function')
+                                global.display.focus_default_window(focusTimestamp);
+                        } catch (e) {
+                        }
+                        return GLib.SOURCE_REMOVE;
+                    });
+                    return true;
+                }
                 if (global.display && typeof global.display.focus_default_window === 'function')
                     global.display.focus_default_window(timestamp);
                 return true;
